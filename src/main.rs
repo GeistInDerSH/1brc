@@ -13,6 +13,7 @@ const INPUT_FILE_NAME: &str = "measurements.txt";
 const BUFFER_CAPACITY: usize = 512 * 512;
 const SEGMENT_SIZE: usize = 1 << 21;
 const HASH_CONST: usize = 0x517cc1b727220a95;
+const MAP_CAPACITY: usize = 512;
 
 type FastEnoughHashMap<K, V> = HashMap<K, V, BuildHasherDefault<FastEnoughHasher>>;
 
@@ -66,6 +67,7 @@ fn take_first_chunk<'a, const N: usize>(slice: &mut &'a [u8]) -> Option<&'a [u8;
 
 #[derive(Clone)]
 struct Data {
+    name: String,
     min: i64,
     max: i64,
     sum: i64,
@@ -74,8 +76,9 @@ struct Data {
 
 impl Data {
     #[inline]
-    fn new(val: i64) -> Self {
+    fn new(name: String, val: i64) -> Self {
         Data {
+            name,
             min: val,
             max: val,
             sum: val,
@@ -170,10 +173,10 @@ fn worker(
     memory: Arc<Mmap>,
     file_size: usize,
     seg: Arc<Mutex<usize>>,
-    entries: Arc<Mutex<FastEnoughHashMap<String, Data>>>,
+    entries: Arc<Mutex<FastEnoughHashMap<u64, Data>>>,
 ) {
-    let mut local_values: FastEnoughHashMap<String, Data> =
-        FastEnoughHashMap::with_capacity_and_hasher(256, Default::default());
+    let mut local_values: FastEnoughHashMap<u64, Data> =
+        FastEnoughHashMap::with_capacity_and_hasher(MAP_CAPACITY, Default::default());
 
     loop {
         // Update the segment, so the next thread to read doesn't read the same one as us
@@ -212,14 +215,21 @@ fn worker(
                 position += 1;
             }
 
-            let station_byte_range = start..start + position;
             let value = parse_to_int(&memory[start + position + 1..newline]);
-            let station = unsafe { std::str::from_utf8_unchecked(&memory[station_byte_range]) };
+            let hash = {
+                let mut hasher = FastEnoughHasher::default();
+                hasher.write(&memory[start..start + position]);
+                hasher.finish()
+            };
 
             local_values
-                .entry(station.to_string())
+                .entry(hash)
                 .and_modify(|data| data.add_value(value))
-                .or_insert(Data::new(value));
+                .or_insert_with(|| {
+                    let station =
+                        unsafe { std::str::from_utf8_unchecked(&memory[start..start + position]) };
+                    Data::new(station.to_string(), value)
+                });
 
             start = newline + 1;
         }
@@ -228,7 +238,7 @@ fn worker(
         if let Ok(mut shared_entries) = entries.try_lock() {
             for (station, data) in &local_values {
                 shared_entries
-                    .entry(station.clone())
+                    .entry(*station)
                     .and_modify(|map_data| map_data.add_data(&data))
                     .or_insert(data.clone());
             }
@@ -257,7 +267,10 @@ fn main() {
 
     let current_segment = Arc::new(Mutex::new(0));
     let memory_region = Arc::new(mapped_file);
-    let entries = Arc::new(Mutex::new(FastEnoughHashMap::default()));
+    let entries = Arc::new(Mutex::new(FastEnoughHashMap::with_capacity_and_hasher(
+        MAP_CAPACITY,
+        Default::default(),
+    )));
 
     let cores = available_parallelism().unwrap().get();
     let workers: Vec<_> = (0..cores)
@@ -278,11 +291,11 @@ fn main() {
         writer.write_all("{".as_bytes()).unwrap();
 
         let size = entry_list.len() - 1;
-        for (i, (name, val)) in entry_list.iter().enumerate() {
+        for (i, val) in entry_list.values().enumerate() {
             writer
                 .write_fmt(format_args!(
                     "{}={:.1}/{:.1}/{:.1}{}",
-                    name,
+                    val.name,
                     val.min(),
                     val.mean(),
                     val.max(),
