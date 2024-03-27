@@ -207,6 +207,7 @@ fn worker(
         while start < end {
             let newline = next_newline(&memory, start);
 
+            // Go in reverse because the value is (in general) shorter than the station name
             let mut position = newline - 1;
             for c in memory[start..newline].iter().rev() {
                 if *c == b';' {
