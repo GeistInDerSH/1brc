@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::fs::File;
-use std::hash::Hasher;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::io::{BufWriter, stdout, Write};
 use std::ops::BitXor;
 use std::sync::{Arc, Mutex};
@@ -12,7 +13,9 @@ const INPUT_FILE_NAME: &str = "measurements.txt";
 const BUFFER_CAPACITY: usize = 512 * 512;
 const SEGMENT_SIZE: usize = 1 << 21;
 const HASH_CONST: usize = 0x517cc1b727220a95;
-const VEC_SIZE: usize = 10_000;
+const MAP_CAPACITY: usize = 512;
+
+type FastEnoughHashMap<K, V> = HashMap<K, V, BuildHasherDefault<FastEnoughHasher>>;
 
 #[derive(Default, Clone)]
 struct FastEnoughHasher {
@@ -22,10 +25,7 @@ struct FastEnoughHasher {
 impl FastEnoughHasher {
     #[inline]
     fn add_to_hash(&mut self, i: usize) {
-        self.hash = self.hash
-            .rotate_left(5)
-            .bitxor(i)
-            .wrapping_mul(HASH_CONST);
+        self.hash = self.hash.rotate_left(5).bitxor(i).wrapping_mul(HASH_CONST);
     }
 }
 
@@ -139,7 +139,11 @@ fn parse_to_int(bytes: &[u8]) -> i64 {
     num *= 10;
     num += (bytes[index] - b'0') as i64;
 
-    if is_negative { -num } else { num }
+    if is_negative {
+        -num
+    } else {
+        num
+    }
 }
 
 fn next_newline(memory: &Mmap, prev: usize) -> usize {
@@ -165,8 +169,14 @@ fn next_newline(memory: &Mmap, prev: usize) -> usize {
     prev
 }
 
-fn worker(memory: Arc<Mmap>, file_size: usize, seg: Arc<Mutex<usize>>, entries: Arc<Mutex<Vec<Option<Data>>>>) {
-    let mut local_values: Vec<Option<Data>> = vec![None; VEC_SIZE];
+fn worker(
+    memory: Arc<Mmap>,
+    file_size: usize,
+    seg: Arc<Mutex<usize>>,
+    entries: Arc<Mutex<FastEnoughHashMap<u64, Data>>>,
+) {
+    let mut local_values: FastEnoughHashMap<u64, Data> =
+        FastEnoughHashMap::with_capacity_and_hasher(MAP_CAPACITY, Default::default());
 
     loop {
         // Update the segment, so the next thread to read doesn't read the same one as us
@@ -181,65 +191,72 @@ fn worker(memory: Arc<Mmap>, file_size: usize, seg: Arc<Mutex<usize>>, entries: 
         }
 
         let end_of_segment = file_size.min(segment + SEGMENT_SIZE);
-        let end = if end_of_segment == file_size { file_size } else { next_newline(&memory, end_of_segment) };
-        let mut start = if segment == 0 { segment } else { next_newline(&memory, segment) + 1 };
+        let end = if end_of_segment == file_size {
+            file_size
+        } else {
+            next_newline(&memory, end_of_segment)
+        };
+        let mut start = if segment == 0 {
+            segment
+        } else {
+            next_newline(&memory, segment) + 1
+        };
 
         // Create a local map we will commit back to the "global" one once we finish processing
         // this segment
         while start < end {
             let newline = next_newline(&memory, start);
 
-            let mut position = 0;
-            for c in &memory[start..newline] {
+            // Go in reverse because the value is (in general) shorter than the station name
+            let mut position = newline - 1;
+            for c in memory[start..newline].iter().rev() {
                 if *c == b';' {
                     break;
                 }
-                position += 1;
+                position -= 1;
             }
 
-            let value = parse_to_int(&memory[start + position + 1..newline]);
+            let value = parse_to_int(&memory[position + 1..newline]);
+            let hash = {
+                let mut hasher = FastEnoughHasher::default();
+                hasher.write(&memory[start..position]);
+                hasher.finish()
+            };
 
-            let mut hasher = FastEnoughHasher::default();
-            let station_byte_range = start..start + position;
-            hasher.write(&memory[station_byte_range.clone()]);
-            let i = hasher.finish() as usize % VEC_SIZE;
-
-            if let Some(ref mut entry) = local_values[i] {
-                entry.add_value(value);
-            } else {
-                let station = unsafe { std::str::from_utf8_unchecked(&memory[station_byte_range]) };
-                local_values[i] = Option::from(Data::new(station.to_string(), value));
-            }
+            local_values
+                .entry(hash)
+                .and_modify(|data| data.add_value(value))
+                .or_insert_with(|| {
+                    let station =
+                        unsafe { std::str::from_utf8_unchecked(&memory[start..position]) };
+                    Data::new(station.to_string(), value)
+                });
 
             start = newline + 1;
         }
 
         // Try to update the shared map, or just move on if we can't get the lock
         if let Ok(mut shared_entries) = entries.try_lock() {
-            for (i, data) in local_values.iter_mut().enumerate() {
-                if let Some(some_data) = data {
-                    if let Some(ref mut val) = shared_entries[i] {
-                        val.add_data(some_data);
-                    } else {
-                        shared_entries[i] = Some(some_data.clone());
-                    }
-                    *data = None;
-                }
+            for (station, data) in &local_values {
+                shared_entries
+                    .entry(*station)
+                    .and_modify(|map_data| map_data.add_data(&data))
+                    .or_insert(data.clone());
             }
+            local_values.clear();
         }
     }
 
-    if local_values.iter().all(|v| v.is_none()) {
+    if local_values.is_empty() {
         return;
     }
     // We have to send any data we have that has not already been sent
     if let Ok(mut shared_map) = entries.lock() {
-        for (i, data) in local_values.iter().flat_map(|v| v).enumerate() {
-            if let Some(ref mut entry) = shared_map[i] {
-                entry.add_data(data);
-            } else {
-                shared_map[i] = Some(data.clone());
-            }
+        for (station, data) in local_values.into_iter() {
+            shared_map
+                .entry(station)
+                .and_modify(|map_data| map_data.add_data(&data))
+                .or_insert(data);
         }
     }
 }
@@ -251,7 +268,10 @@ fn main() {
 
     let current_segment = Arc::new(Mutex::new(0));
     let memory_region = Arc::new(mapped_file);
-    let entries = Arc::new(Mutex::new(vec![None; VEC_SIZE]));
+    let entries = Arc::new(Mutex::new(FastEnoughHashMap::with_capacity_and_hasher(
+        MAP_CAPACITY,
+        Default::default(),
+    )));
 
     let cores = available_parallelism().unwrap().get();
     let workers: Vec<_> = (0..cores)
@@ -271,16 +291,15 @@ fn main() {
         let mut writer = BufWriter::with_capacity(BUFFER_CAPACITY, stdout());
         writer.write_all("{".as_bytes()).unwrap();
 
-        let only_data = entry_list.iter().flat_map(|v| v).collect::<Vec<_>>();
-        let size = only_data.len() - 1;
-        for (i, v) in only_data.into_iter().enumerate() {
+        let size = entry_list.len() - 1;
+        for (i, val) in entry_list.values().enumerate() {
             writer
                 .write_fmt(format_args!(
                     "{}={:.1}/{:.1}/{:.1}{}",
-                    v.name,
-                    v.min(),
-                    v.mean(),
-                    v.max(),
+                    val.name,
+                    val.min(),
+                    val.mean(),
+                    val.max(),
                     if i == size { "" } else { ", " },
                 ))
                 .unwrap();
