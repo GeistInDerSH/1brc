@@ -207,18 +207,18 @@ fn worker(
         while start < end {
             let newline = next_newline(&memory, start);
 
-            let mut position = 0;
-            for c in &memory[start..newline] {
+            let mut position = newline - 1;
+            for c in memory[start..newline].iter().rev() {
                 if *c == b';' {
                     break;
                 }
-                position += 1;
+                position -= 1;
             }
 
-            let value = parse_to_int(&memory[start + position + 1..newline]);
+            let value = parse_to_int(&memory[position + 1..newline]);
             let hash = {
                 let mut hasher = FastEnoughHasher::default();
-                hasher.write(&memory[start..start + position]);
+                hasher.write(&memory[start..position]);
                 hasher.finish()
             };
 
@@ -227,7 +227,7 @@ fn worker(
                 .and_modify(|data| data.add_value(value))
                 .or_insert_with(|| {
                     let station =
-                        unsafe { std::str::from_utf8_unchecked(&memory[start..start + position]) };
+                        unsafe { std::str::from_utf8_unchecked(&memory[start..position]) };
                     Data::new(station.to_string(), value)
                 });
 
