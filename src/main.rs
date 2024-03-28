@@ -124,20 +124,20 @@ fn parse_to_int(bytes: &[u8]) -> i64 {
     let is_negative = bytes[0] == b'-';
     let mut index = if is_negative { 1 } else { 0 };
 
-    // read the first int
-    let mut num = (bytes[index] - b'0') as i64;
-    index += 1;
-
-    // optionally read the second int
-    if bytes[index] != b'.' {
-        num *= 10;
-        num += (bytes[index] - b'0') as i64;
+    let mut num = if bytes[index + 1] == b'.' {
+        // -?\d.\d
+        let value = 10 * (bytes[index] - b'0') as i64;
         index += 1;
-    }
+        value
+    } else {
+        // -?\d\d.\d
+        let value = 100 * (bytes[index] - b'0') as i64 + 10 * (bytes[index + 1] - b'0') as i64;
+        index += 2;
+        value
+    };
     index += 1; // skip .
 
     // read the decimal
-    num *= 10;
     num += (bytes[index] - b'0') as i64;
 
     if is_negative {
