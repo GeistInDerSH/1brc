@@ -147,6 +147,7 @@ fn parse_to_int(bytes: &[u8]) -> i64 {
     }
 }
 
+#[inline]
 #[allow(dead_code)]
 fn parse_to_int_bit_shift(bytes: &[u8]) -> i64 {
     let mut buff: [u8; 8] = [0u8; size_of::<i64>()];
