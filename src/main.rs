@@ -27,16 +27,15 @@ const ESTIMATED_PRINT_SIZE: usize = 20 // station name
         + 2 // comma and space
 ;
 
-type FastEnoughHashMap<K, V> = HashMap<K, V, BuildHasherDefault<FastEnoughHasher>>;
+type FxHashMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
-/// FastEnoughHasher is just FxHasher, pulled out of the rustc_hash crate to avoid having it
-/// as a dependency
+/// Pulled out of the rustc_hash crate to avoid having it as a dependency
 #[derive(Default, Clone)]
-struct FastEnoughHasher {
+struct FxHasher {
     hash: usize,
 }
 
-impl FastEnoughHasher {
+impl FxHasher {
     #[inline]
     fn add_to_hash(&mut self, i: usize) {
         self.hash = self
@@ -47,7 +46,7 @@ impl FastEnoughHasher {
     }
 }
 
-impl Hasher for FastEnoughHasher {
+impl Hasher for FxHasher {
     #[inline]
     fn finish(&self) -> u64 {
         self.hash as u64
@@ -87,6 +86,13 @@ struct Mmap {
 }
 
 impl Mmap {
+    #[inline]
+    fn from_file_name(name: &str) -> Result<Self, io::Error> {
+        let file = File::open(name)?;
+        Mmap::from_file(file)
+    }
+
+    #[inline]
     fn from_file(file: File) -> Result<Self, io::Error> {
         let size = file.metadata()?.len() as usize;
 
@@ -109,6 +115,7 @@ impl Mmap {
         }
     }
 
+    #[inline]
     fn as_slice(&self) -> &'static [u8] {
         unsafe { slice::from_raw_parts(self.addr.cast(), self.size) }
     }
@@ -229,10 +236,9 @@ fn worker<'a>(
     memory: &'a [u8],
     file_size: usize,
     seg: Arc<Mutex<usize>>,
-    entries: Arc<Mutex<FastEnoughHashMap<u64, Data<'a>>>>,
+    entries: Arc<Mutex<FxHashMap<u64, Data<'a>>>>,
 ) {
-    let mut local_values: FastEnoughHashMap<u64, Data> =
-        FastEnoughHashMap::with_capacity_and_hasher(MAP_CAPACITY, Default::default());
+    let mut local_values = FxHashMap::with_capacity_and_hasher(MAP_CAPACITY, Default::default());
 
     loop {
         // Update the segment, so the next thread to read doesn't read the same one as us
@@ -267,14 +273,14 @@ fn worker<'a>(
             let (station, value) = parse_line(line);
 
             let hash = {
-                let mut hasher = FastEnoughHasher::default();
+                let mut hasher = FxHasher::default();
                 hasher.write(&station);
                 hasher.finish()
             };
 
             local_values
                 .entry(hash)
-                .and_modify(|data| data.add_value(value))
+                .and_modify(|data: &mut Data<'a>| data.add_value(value))
                 .or_insert_with(|| Data::new(station, value));
 
             start = newline + 1;
@@ -294,14 +300,13 @@ fn worker<'a>(
 
 fn main() -> io::Result<()> {
     let start_time = Instant::now();
-    let fp = File::open(INPUT_FILE_NAME)?;
 
-    let mapped_file = Mmap::from_file(fp)?;
+    let mapped_file = Mmap::from_file_name(INPUT_FILE_NAME)?;
     let file_size = mapped_file.size;
     let file_data = mapped_file.as_slice();
 
     let current_segment = Arc::new(Mutex::new(0));
-    let entries = Arc::new(Mutex::new(FastEnoughHashMap::with_capacity_and_hasher(
+    let entries = Arc::new(Mutex::new(FxHashMap::with_capacity_and_hasher(
         MAP_CAPACITY,
         Default::default(),
     )));
