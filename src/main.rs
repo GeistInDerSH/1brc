@@ -391,4 +391,16 @@ mod test {
         assert_eq!(parse_to_int_bit_shift("99.9".as_bytes()), 999);
         assert_eq!(parse_to_int_bit_shift("-99.9".as_bytes()), -999);
     }
+
+    #[test]
+    fn parse_line_test() {
+        assert_eq!(
+            parse_line("phoenix;50.0".as_bytes()),
+            ("phoenix".as_bytes(), 500)
+        );
+        assert_eq!(
+            parse_line("phoenix;-50.0".as_bytes()),
+            ("phoenix".as_bytes(), -500)
+        );
+    }
 }
