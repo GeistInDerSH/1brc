@@ -338,7 +338,10 @@ fn main() {
             let mmap_data = file_data;
             let segment = current_segment.clone();
             let map = entries.clone();
-            thread::spawn(move || worker(mmap_data, file_size, segment, map))
+            thread::Builder::new()
+                .stack_size(1024)
+                .spawn(move || worker(mmap_data, file_size, segment, map))
+                .unwrap()
         })
         .collect();
 
