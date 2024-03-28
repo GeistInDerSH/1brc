@@ -22,8 +22,9 @@ panic = "abort"
 debug = "none"
 split-debuginfo = "off"
 strip = "symbols"
+incremental = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-memmap2 = "0.9.4"
+libc = "0.2.153"
