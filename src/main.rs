@@ -1,17 +1,16 @@
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::fs::File;
 use std::hash::{BuildHasherDefault, Hasher};
-use std::io::{stdout, BufWriter, Write};
+use std::io::{stdout, Write};
 use std::mem::size_of;
 use std::ops::BitXor;
+use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::thread::available_parallelism;
-
-use memmap2::Mmap;
+use std::{io, slice, thread};
 
 const INPUT_FILE_NAME: &str = "measurements.txt";
-const BUFFER_CAPACITY: usize = 512 * 512;
 const SEGMENT_SIZE: usize = 1 << 21;
 const HASH_CONST: usize = 0x517cc1b727220a95;
 const MAP_CAPACITY: usize = 512;
@@ -66,18 +65,51 @@ fn take_first_chunk<'a, const N: usize>(slice: &mut &'a [u8]) -> Option<&'a [u8;
     }
 }
 
+struct Mmap {
+    addr: *mut c_void,
+    size: usize,
+}
+
+impl Mmap {
+    fn from_file(file: File) -> Result<Self, io::Error> {
+        let size = file.metadata()?.len() as usize;
+
+        let addr = unsafe {
+            let fd = file.as_raw_fd();
+            libc::mmap(
+                std::ptr::null_mut(),
+                size as libc::size_t,
+                libc::PROT_READ,
+                libc::MAP_PRIVATE,
+                fd,
+                0,
+            )
+        };
+
+        if addr == libc::MAP_FAILED {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(Self { addr, size })
+        }
+    }
+
+    fn as_slice(&self) -> &'static [u8] {
+        unsafe { slice::from_raw_parts(self.addr.cast(), self.size) }
+    }
+}
+
 #[derive(Clone)]
-struct Data {
-    name: String,
+struct Data<'a> {
+    name: &'a [u8],
     min: i64,
     max: i64,
     sum: i64,
     count: i64,
 }
 
-impl Data {
+impl<'a> Data<'a> {
     #[inline]
-    fn new(name: String, val: i64) -> Self {
+    fn new(name: &'a [u8], val: i64) -> Self {
         Data {
             name,
             min: val,
@@ -121,24 +153,28 @@ impl Data {
 
 #[inline]
 fn parse_to_int(bytes: &[u8]) -> i64 {
-    let is_negative = bytes[0] == b'-';
+    let is_negative = unsafe { *bytes.get_unchecked(0) == b'-' };
     let mut index = if is_negative { 1 } else { 0 };
 
-    let mut num = if bytes[index + 1] == b'.' {
-        // -?\d.\d
-        let value = 10 * (bytes[index] - b'0') as i64;
-        index += 1;
-        value
-    } else {
-        // -?\d\d.\d
-        let value = 100 * (bytes[index] - b'0') as i64 + 10 * (bytes[index + 1] - b'0') as i64;
-        index += 2;
-        value
-    };
-    index += 1; // skip .
+    let num = unsafe {
+        let mut num = if *bytes.get_unchecked(index + 1) == b'.' {
+            // -?\d.\d
+            let value = 10 * (*bytes.get_unchecked(index) - b'0') as i64;
+            index += 1;
+            value
+        } else {
+            // -?\d\d.\d
+            let value = 100 * (*bytes.get_unchecked(index) - b'0') as i64
+                + 10 * (*bytes.get_unchecked(index + 1) - b'0') as i64;
+            index += 2;
+            value
+        };
+        index += 1; // skip .
 
-    // read the decimal
-    num += (bytes[index] - b'0') as i64;
+        // read the decimal
+        num += (*bytes.get_unchecked(index) - b'0') as i64;
+        num
+    };
 
     if is_negative {
         -num
@@ -165,7 +201,7 @@ fn parse_to_int_bit_shift(bytes: &[u8]) -> i64 {
     (abs ^ signed) - signed
 }
 
-fn next_newline(memory: &Mmap, prev: usize) -> usize {
+fn next_newline(memory: &[u8], prev: usize) -> usize {
     let mut prev = prev;
     loop {
         // If we were to try and slice past the end, just return the end
@@ -188,11 +224,11 @@ fn next_newline(memory: &Mmap, prev: usize) -> usize {
     prev
 }
 
-fn worker(
-    memory: Arc<Mmap>,
+fn worker<'a>(
+    memory: &'a [u8],
     file_size: usize,
     seg: Arc<Mutex<usize>>,
-    entries: Arc<Mutex<FastEnoughHashMap<u64, Data>>>,
+    entries: Arc<Mutex<FastEnoughHashMap<u64, Data<'a>>>>,
 ) {
     let mut local_values: FastEnoughHashMap<u64, Data> =
         FastEnoughHashMap::with_capacity_and_hasher(MAP_CAPACITY, Default::default());
@@ -213,62 +249,48 @@ fn worker(
         let end = if end_of_segment == file_size {
             file_size
         } else {
-            next_newline(&memory, end_of_segment)
+            next_newline(memory, end_of_segment)
         };
         let mut start = if segment == 0 {
             segment
         } else {
-            next_newline(&memory, segment) + 1
+            next_newline(memory, segment) + 1
         };
 
         // Create a local map we will commit back to the "global" one once we finish processing
         // this segment
         while start < end {
-            let newline = next_newline(&memory, start);
+            let newline = next_newline(memory, start);
 
-            // Go in reverse because the value is (in general) shorter than the station name
-            let mut position = newline - 1;
-            for c in memory[start..newline].iter().rev() {
-                if *c == b';' {
-                    break;
+            let position = unsafe {
+                // Go in reverse because the value is (in general) shorter than the station name
+                let mut position = newline - 1;
+                for c in memory.get_unchecked(start..newline).iter().rev() {
+                    if *c == b';' {
+                        break;
+                    }
+                    position -= 1;
                 }
-                position -= 1;
-            }
+                position
+            };
 
             let value = parse_to_int(&memory[position + 1..newline]);
             let hash = {
                 let mut hasher = FastEnoughHasher::default();
-                hasher.write(&memory[start..position]);
+                let data = unsafe { memory.get_unchecked(start..position) };
+                hasher.write(&data);
                 hasher.finish()
             };
 
             local_values
                 .entry(hash)
                 .and_modify(|data| data.add_value(value))
-                .or_insert_with(|| {
-                    let station =
-                        unsafe { std::str::from_utf8_unchecked(&memory[start..position]) };
-                    Data::new(station.to_string(), value)
-                });
+                .or_insert_with(|| Data::new(&memory[start..position], value));
 
             start = newline + 1;
         }
-
-        // Try to update the shared map, or just move on if we can't get the lock
-        if let Ok(mut shared_entries) = entries.try_lock() {
-            for (station, data) in &local_values {
-                shared_entries
-                    .entry(*station)
-                    .and_modify(|map_data| map_data.add_data(&data))
-                    .or_insert(data.clone());
-            }
-            local_values.clear();
-        }
     }
 
-    if local_values.is_empty() {
-        return;
-    }
     // We have to send any data we have that has not already been sent
     if let Ok(mut shared_map) = entries.lock() {
         for (station, data) in local_values.into_iter() {
@@ -282,11 +304,12 @@ fn worker(
 
 fn main() {
     let fp = File::open(INPUT_FILE_NAME).unwrap();
-    let mapped_file = unsafe { Mmap::map(&fp).unwrap() };
-    let file_size = mapped_file.len();
+
+    let mapped_file = Mmap::from_file(fp).unwrap();
+    let file_size = mapped_file.size;
+    let file_data = mapped_file.as_slice();
 
     let current_segment = Arc::new(Mutex::new(0));
-    let memory_region = Arc::new(mapped_file);
     let entries = Arc::new(Mutex::new(FastEnoughHashMap::with_capacity_and_hasher(
         MAP_CAPACITY,
         Default::default(),
@@ -295,10 +318,10 @@ fn main() {
     let cores = available_parallelism().unwrap().get();
     let workers: Vec<_> = (0..cores)
         .map(|_| {
-            let region = memory_region.clone();
+            let mmap_data = file_data;
             let segment = current_segment.clone();
             let map = entries.clone();
-            thread::spawn(move || worker(region, file_size, segment, map))
+            thread::spawn(move || worker(mmap_data, file_size, segment, map))
         })
         .collect();
 
@@ -307,23 +330,29 @@ fn main() {
     }
 
     if let Ok(entry_list) = entries.lock() {
-        let mut writer = BufWriter::with_capacity(BUFFER_CAPACITY, stdout());
-        writer.write_all("{".as_bytes()).unwrap();
+        let estimated_size = 20 + 1 + 15 + 2 + 2;
 
-        let size = entry_list.len() - 1;
+        let mut writer: Vec<u8> = Vec::with_capacity(entry_list.len() * estimated_size);
+        writer.push(b'{');
         for (i, val) in entry_list.values().enumerate() {
-            writer
-                .write_fmt(format_args!(
-                    "{}={:.1}/{:.1}/{:.1}{}",
-                    val.name,
-                    val.min(),
-                    val.mean(),
-                    val.max(),
-                    if i == size { "" } else { ", " },
-                ))
-                .unwrap();
+            if i > 0 {
+                writer.extend_from_slice(b", ");
+            }
+
+            writer.extend_from_slice(val.name);
+            writer.push(b'=');
+
+            write!(
+                writer,
+                "{:.1}/{:.1}/{:.1}",
+                val.min(),
+                val.mean(),
+                val.max(),
+            )
+            .unwrap();
         }
-        writer.write_all("}".as_bytes()).unwrap();
+        writer.extend_from_slice(b"}\n");
+        stdout().lock().write_all(&writer).unwrap();
     };
 }
 
