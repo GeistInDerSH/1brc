@@ -2,8 +2,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::fs::File;
 use std::hash::{BuildHasherDefault, Hasher};
-use std::io::{stdout, Read, Write};
-use std::mem::size_of;
+use std::io::{stdout, Write};
 use std::ops::BitXor;
 use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
@@ -149,56 +148,6 @@ impl<'a> Data<'a> {
         self.sum += data.sum;
         self.count += data.count;
     }
-}
-
-#[inline]
-fn parse_to_int(bytes: &[u8]) -> i64 {
-    let is_negative = unsafe { *bytes.get_unchecked(0) == b'-' };
-    let mut index = if is_negative { 1 } else { 0 };
-
-    let num = unsafe {
-        let mut num = if *bytes.get_unchecked(index + 1) == b'.' {
-            // -?\d.\d
-            let value = 10 * (*bytes.get_unchecked(index) - b'0') as i64;
-            index += 1;
-            value
-        } else {
-            // -?\d\d.\d
-            let value = 100 * (*bytes.get_unchecked(index) - b'0') as i64
-                + 10 * (*bytes.get_unchecked(index + 1) - b'0') as i64;
-            index += 2;
-            value
-        };
-        index += 1; // skip .
-
-        // read the decimal
-        num += (*bytes.get_unchecked(index) - b'0') as i64;
-        num
-    };
-
-    if is_negative {
-        -num
-    } else {
-        num
-    }
-}
-
-#[inline]
-#[allow(dead_code)]
-fn parse_to_int_bit_shift(bytes: &[u8]) -> i64 {
-    let mut buff: [u8; 8] = [0u8; size_of::<i64>()];
-    buff.as_mut().write(bytes).unwrap();
-
-    let word = i64::from_ne_bytes(buff);
-    let decimal_pos = i64::trailing_zeros(!word & 0x10101000) as i64;
-
-    let shift = 28 - decimal_pos;
-    let signed = (!word << 59) >> 63;
-    let mask = !(signed & 0xFF);
-    let digits = ((word & mask) << shift) & 0x0F000F0F00;
-    let abs = ((digits * 0x640A0001) >> 32) & 0x3FF;
-
-    (abs ^ signed) - signed
 }
 
 fn next_newline(memory: &[u8], prev: usize) -> usize {
@@ -379,18 +328,6 @@ fn main() {
 #[cfg(test)]
 mod test {
     use super::*;
-
-    #[test]
-    fn parse_to_int_test() {
-        assert_eq!(parse_to_int("99.9".as_bytes()), 999);
-        assert_eq!(parse_to_int("-99.9".as_bytes()), -999);
-    }
-
-    #[test]
-    fn parse_to_int_2_test() {
-        assert_eq!(parse_to_int_bit_shift("99.9".as_bytes()), 999);
-        assert_eq!(parse_to_int_bit_shift("-99.9".as_bytes()), -999);
-    }
 
     #[test]
     fn parse_line_test() {
