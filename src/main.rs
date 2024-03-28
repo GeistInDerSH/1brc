@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::fs::File;
 use std::hash::{BuildHasherDefault, Hasher};
-use std::io::{stdout, Write};
+use std::io::{stdout, Read, Write};
 use std::mem::size_of;
 use std::ops::BitXor;
 use std::os::fd::AsRawFd;
@@ -224,6 +224,34 @@ fn next_newline(memory: &[u8], prev: usize) -> usize {
     prev
 }
 
+#[inline]
+fn parse_line(line: &[u8]) -> (&[u8], i64) {
+    unsafe {
+        let len = line.len();
+
+        let float_digit = (*line.get_unchecked(len - 1) & 0x0F) as i64;
+        let int_2 = (*line.get_unchecked(len - 3) & 0x0F) as i64 * 10;
+
+        let (sep, is_neg, int_1) = match *line.get_unchecked(len - 4) {
+            b';' => (len - 4, false, 0),
+            b'-' => (len - 5, true, 0),
+            val => {
+                let int_1 = (val & 0x0F) as i64 * 100;
+                match *line.get_unchecked(len - 5) {
+                    b';' => (len - 5, false, int_1),
+                    _ => (len - 6, true, int_1),
+                }
+            }
+        };
+
+        let tmp = int_1 + int_2 + float_digit;
+        let temp = if is_neg { -tmp } else { tmp };
+        let station = line.get_unchecked(..sep);
+
+        (station, temp)
+    }
+}
+
 fn worker<'a>(
     memory: &'a [u8],
     file_size: usize,
@@ -262,30 +290,19 @@ fn worker<'a>(
         while start < end {
             let newline = next_newline(memory, start);
 
-            let position = unsafe {
-                // Go in reverse because the value is (in general) shorter than the station name
-                let mut position = newline - 1;
-                for c in memory.get_unchecked(start..newline).iter().rev() {
-                    if *c == b';' {
-                        break;
-                    }
-                    position -= 1;
-                }
-                position
-            };
+            let line = &memory[start..newline];
+            let (station, value) = parse_line(line);
 
-            let value = parse_to_int(&memory[position + 1..newline]);
             let hash = {
                 let mut hasher = FastEnoughHasher::default();
-                let data = unsafe { memory.get_unchecked(start..position) };
-                hasher.write(&data);
+                hasher.write(&station);
                 hasher.finish()
             };
 
             local_values
                 .entry(hash)
                 .and_modify(|data| data.add_value(value))
-                .or_insert_with(|| Data::new(&memory[start..position], value));
+                .or_insert_with(|| Data::new(station, value));
 
             start = newline + 1;
         }
