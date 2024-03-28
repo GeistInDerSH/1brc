@@ -8,6 +8,7 @@ use std::ops::BitXor;
 use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
 use std::thread::available_parallelism;
+use std::time::Instant;
 use std::{io, slice, thread};
 
 const INPUT_FILE_NAME: &str = "measurements.txt";
@@ -268,6 +269,7 @@ fn worker<'a>(
 }
 
 fn main() {
+    let start_time = Instant::now();
     let fp = File::open(INPUT_FILE_NAME).unwrap();
 
     let mapped_file = Mmap::from_file(fp).unwrap();
@@ -322,6 +324,8 @@ fn main() {
         writer.extend_from_slice(b"}\n");
         stdout().lock().write_all(&writer).unwrap();
     };
+
+    eprintln!("Runtime: {:?}", start_time.elapsed());
 }
 
 #[cfg(test)]
