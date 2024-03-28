@@ -8,8 +8,8 @@ RUSTFLAGS="-Cprofile-generate=/tmp/pgo-data" \
     cargo build --release --target=x86_64-unknown-linux-gnu
 
 # STEP 2: Run the instrumented binaries with some typical data
-for _ in {0..3}; do
-  ./target/x86_64-unknown-linux-gnu/release/rust_1brr > /dev/null
+for _ in {0..5}; do
+  time (./target/x86_64-unknown-linux-gnu/release/rust_1brr > /dev/null)
 done
 
 # STEP 3: Merge the `.profraw` files into a `.profdata` file
