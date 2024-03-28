@@ -16,6 +16,13 @@ const SEGMENT_SIZE: usize = 1 << 21;
 const HASH_CONST: usize = 0x517cc1b727220a95;
 const MAP_CAPACITY: usize = 512;
 
+const ESTIMATED_PRINT_SIZE: usize = 20 // station name
+        + 1 // equals
+        + (3 * 5) // -?\d?\d.\d for the min/max/ave
+        + 2 // slashes between the numbers
+        + 2 // comma and space
+;
+
 type FastEnoughHashMap<K, V> = HashMap<K, V, BuildHasherDefault<FastEnoughHasher>>;
 
 #[derive(Default, Clone)]
@@ -268,11 +275,11 @@ fn worker<'a>(
     }
 }
 
-fn main() {
+fn main() -> io::Result<()> {
     let start_time = Instant::now();
-    let fp = File::open(INPUT_FILE_NAME).unwrap();
+    let fp = File::open(INPUT_FILE_NAME)?;
 
-    let mapped_file = Mmap::from_file(fp).unwrap();
+    let mapped_file = Mmap::from_file(fp)?;
     let file_size = mapped_file.size;
     let file_data = mapped_file.as_slice();
 
@@ -282,7 +289,7 @@ fn main() {
         Default::default(),
     )));
 
-    let cores = available_parallelism().unwrap().get();
+    let cores = available_parallelism()?.get();
     let workers: Vec<_> = (0..cores)
         .map(|_| {
             let mmap_data = file_data;
@@ -291,18 +298,15 @@ fn main() {
             thread::Builder::new()
                 .stack_size(1024)
                 .spawn(move || worker(mmap_data, file_size, segment, map))
-                .unwrap()
         })
         .collect();
 
     for worker in workers {
-        worker.join().unwrap();
+        worker?.join().unwrap();
     }
 
     if let Ok(entry_list) = entries.lock() {
-        let estimated_size = 20 + 1 + 15 + 2 + 2;
-
-        let mut writer: Vec<u8> = Vec::with_capacity(entry_list.len() * estimated_size);
+        let mut writer: Vec<u8> = Vec::with_capacity(MAP_CAPACITY * ESTIMATED_PRINT_SIZE);
         writer.push(b'{');
         for (i, val) in entry_list.values().enumerate() {
             if i > 0 {
@@ -318,14 +322,14 @@ fn main() {
                 val.min(),
                 val.mean(),
                 val.max(),
-            )
-            .unwrap();
+            )?;
         }
         writer.extend_from_slice(b"}\n");
-        stdout().lock().write_all(&writer).unwrap();
+        stdout().lock().write_all(&writer)?;
     };
 
     eprintln!("Runtime: {:?}", start_time.elapsed());
+    Ok(())
 }
 
 #[cfg(test)]
