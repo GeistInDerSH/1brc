@@ -12,10 +12,14 @@ use std::time::Instant;
 use std::{io, slice, thread};
 
 const INPUT_FILE_NAME: &str = "measurements.txt";
+/// The size of the Mmap segment to read
 const SEGMENT_SIZE: usize = 1 << 21;
-const HASH_CONST: usize = 0x517cc1b727220a95;
+/// 64-bit hash constant from FxHash
+const FX_HASH_CONST: usize = 0x517cc1b727220a95;
+/// There are up to 413 unique stations, so this is the closes power of 2
 const MAP_CAPACITY: usize = 512;
-
+/// Cover the size of the format string to allow for us to have an approximately
+/// correct write buffer size
 const ESTIMATED_PRINT_SIZE: usize = 20 // station name
         + 1 // equals
         + (3 * 5) // -?\d?\d.\d for the min/max/ave
@@ -25,6 +29,8 @@ const ESTIMATED_PRINT_SIZE: usize = 20 // station name
 
 type FastEnoughHashMap<K, V> = HashMap<K, V, BuildHasherDefault<FastEnoughHasher>>;
 
+/// FastEnoughHasher is just FxHasher, pulled out of the rustc_hash crate to avoid having it
+/// as a dependency
 #[derive(Default, Clone)]
 struct FastEnoughHasher {
     hash: usize,
@@ -33,7 +39,11 @@ struct FastEnoughHasher {
 impl FastEnoughHasher {
     #[inline]
     fn add_to_hash(&mut self, i: usize) {
-        self.hash = self.hash.rotate_left(5).bitxor(i).wrapping_mul(HASH_CONST);
+        self.hash = self
+            .hash
+            .rotate_left(5)
+            .bitxor(i)
+            .wrapping_mul(FX_HASH_CONST);
     }
 }
 
@@ -104,6 +114,9 @@ impl Mmap {
     }
 }
 
+// i64 is definitely overkill for the min and max, but i16/i32
+// doesn't seem to provide much of a benefit in terms of speed. Likely because the
+// CPU can load it all into memory anyway ¯\_(ツ)_/¯
 #[derive(Clone)]
 struct Data<'a> {
     name: &'a [u8],
@@ -157,6 +170,8 @@ impl<'a> Data<'a> {
     }
 }
 
+// Copy of the winning submission, with some minor changes to adapt the Java code to Rust
+// https://github.com/gunnarmorling/1brc/blob/3372b6b29072af7359c5137bd1893d98828029a2/src/main/java/dev/morling/onebrc/CalculateAverage_thomaswue.java#L267
 fn next_newline(memory: &[u8], prev: usize) -> usize {
     let mut prev = prev;
     loop {
@@ -180,6 +195,8 @@ fn next_newline(memory: &[u8], prev: usize) -> usize {
     prev
 }
 
+// Copy of arthurlm's version
+// https://github.com/arthurlm/one-brc-rs/blob/139807ce242fb33b33f07778f38a103e4057ed23/src/main.rs#L124
 #[inline]
 fn parse_line(line: &[u8]) -> (&[u8], i64) {
     unsafe {
