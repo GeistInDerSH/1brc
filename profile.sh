@@ -9,7 +9,7 @@ RUSTFLAGS="-Cprofile-generate=/tmp/pgo-data" \
 
 # STEP 2: Run the instrumented binaries with some typical data
 for _ in {0..5}; do
-  time (./target/x86_64-unknown-linux-gnu/release/rust_1brr > /dev/null)
+  time (./target/x86_64-unknown-linux-gnu/release/rs-1brc > /dev/null)
 done
 
 # STEP 3: Merge the `.profraw` files into a `.profdata` file
