@@ -1,7 +1,8 @@
 [package]
-name = "rust_1brr"
+name = "rs-1brc"
 version = "0.1.0"
 edition = "2021"
+authors = ["Matthew H. GeistInDerSH@gmail.com"]
 
 [profile.dev]
 overflow-checks = false
