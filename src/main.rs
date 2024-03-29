@@ -121,6 +121,12 @@ impl Mmap {
     }
 }
 
+impl Drop for Mmap {
+    fn drop(&mut self) {
+        unsafe { libc::munmap(self.addr, self.size) };
+    }
+}
+
 // i64 is definitely overkill for the min and max, but i16/i32
 // doesn't seem to provide much of a benefit in terms of speed. Likely because the
 // CPU can load it all into memory anyway ¯\_(ツ)_/¯
