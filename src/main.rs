@@ -334,9 +334,12 @@ fn main() -> io::Result<()> {
     }
 
     if let Ok(entry_list) = entries.lock() {
+        let mut records: Vec<_> = entry_list.values().collect();
+        records.sort_unstable_by_key(|d| d.name);
+
         let mut writer: Vec<u8> = Vec::with_capacity(MAP_CAPACITY * ESTIMATED_PRINT_SIZE);
         writer.push(b'{');
-        for (i, val) in entry_list.values().enumerate() {
+        for (i, val) in records.into_iter().enumerate() {
             if i > 0 {
                 writer.extend_from_slice(b", ");
             }
