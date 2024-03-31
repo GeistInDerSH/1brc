@@ -2,14 +2,14 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::fs::File;
 use std::hash::{BuildHasherDefault, Hasher};
-use std::io::{stdout, Write};
+use std::io::{stdout, Read, Write};
 use std::mem::size_of;
 use std::ops::BitXor;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread::available_parallelism;
-use std::time::Instant;
-use std::{io, slice, thread};
+use std::{env, io, slice, thread};
 
 const INPUT_FILE_NAME: &str = "measurements.txt";
 /// The size of the Mmap segment to read
@@ -304,8 +304,29 @@ fn worker<'a>(
     }
 }
 
+/// spawn_child spawns a child process that will actually do the data processing.
+/// The parent process, the one calling this function, waits for the output then exits.
+/// This saves the required time to call [Drop] for [Mmap] which is about 25ms
+fn spawn_child() {
+    let mut child = Command::new(env::current_exe().unwrap())
+        .arg("--worker")
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("Failed to create subprocess");
+
+    let mut output = child.stdout.take().unwrap();
+
+    let mut buf = Vec::with_capacity(MAP_CAPACITY * ESTIMATED_PRINT_SIZE);
+    output.read_to_end(&mut buf).unwrap();
+    stdout().lock().write_all(&buf).unwrap();
+}
+
 fn main() -> io::Result<()> {
-    let start_time = Instant::now();
+    // Only "main" program is being run, not via a subprocess
+    if env::args().len() == 1 {
+        spawn_child();
+        return Ok(());
+    }
 
     let mapped_file = Mmap::from_file_name(INPUT_FILE_NAME)?;
     let file_size = mapped_file.size;
@@ -359,7 +380,11 @@ fn main() -> io::Result<()> {
         stdout().lock().write_all(&writer)?;
     };
 
-    eprintln!("Runtime: {:?}", start_time.elapsed());
+    let f = unsafe {
+        let out = stdout().as_raw_fd();
+        File::from_raw_fd(out)
+    };
+    drop(f);
     Ok(())
 }
 
