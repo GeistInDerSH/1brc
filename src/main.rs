@@ -98,17 +98,30 @@ impl Mmap {
 
         let addr = unsafe {
             let fd = file.as_raw_fd();
-            libc::mmap(
-                std::ptr::null_mut(),
-                size as libc::size_t,
-                libc::PROT_READ,
-                libc::MAP_PRIVATE,
-                fd,
-                0,
-            )
+            let mut addr: *mut c_void;
+            // https://blog.rchapman.org/posts/Linux_System_Call_Table_for_x86_64/
+            std::arch::asm!(
+                // mov rax, 9           ; mmap syscall
+                // mov rdi, 0x00        ; null ptr
+                // mov rsi, {size}      ; allocation size
+                // mov rdx, PROT_READ   ; protections
+                // mov r10, MAP_PRIVATE ; MMAP flags
+                // mov r8,  {fd}        ; file
+                // mov r9,  0           ; offset
+                "syscall",
+                in("rax") 9,
+                in("rdi") 0x00,
+                in("rsi") size,
+                in("rdx") 0x1,
+                in("r10") 0x0002,
+                in("r8") fd,
+                in("r9") 0,
+                lateout("rax") addr,
+            );
+            addr
         };
 
-        if addr == libc::MAP_FAILED {
+        if addr == (!0 as *mut c_void) {
             Err(io::Error::last_os_error())
         } else {
             Ok(Self { addr, size })
@@ -117,13 +130,21 @@ impl Mmap {
 
     #[inline]
     fn as_slice(&self) -> &'static [u8] {
+        // https://blog.rchapman.org/posts/Linux_System_Call_Table_for_x86_64/
         unsafe { slice::from_raw_parts(self.addr.cast(), self.size) }
     }
 }
 
 impl Drop for Mmap {
     fn drop(&mut self) {
-        unsafe { libc::munmap(self.addr, self.size) };
+        unsafe {
+            std::arch::asm!(
+                "syscall",
+                in("rax") 11,
+                in("rdi") self.addr,
+                in("rsi") self.size,
+            );
+        }
     }
 }
 
