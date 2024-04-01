@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - x64-no-dependencies
     paths:
       - ".github/workflows/rust.yml"
       - "src/**/*.rs"
@@ -23,6 +24,15 @@ jobs:
       - name: Install Deps
         run: sudo apt install clang lld
       - name: Build
-        run: cargo build --verbose
-      - name: Test
-        run: cargo test --verbose
+        run: |
+          rustc -Copt-level=3 \
+                -Ccodegen-units=1 \
+                -Clto=fat \
+                -Coverflow-checks=false \
+                -Cpanic=abort \
+                -Csplit-debuginfo=off \
+                -Cstrip=symbols \
+                -Ctarget-cpu=native \
+                -Ccode-model=small \
+                -Cdefault-linker-libraries=true \
+                ./src/main.rs

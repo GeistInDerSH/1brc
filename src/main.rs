@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::ffi::c_void;
 use std::fs::File;
 use std::hash::{BuildHasherDefault, Hasher};
