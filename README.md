@@ -13,14 +13,14 @@ Hardware:
 ```bash
 # Cold Cache
 \time -f 'Elapsed: %E' ./target/release/rs-1brc > /dev/null
-Elapsed: 0:26.16
+Elapsed: 0:22.65
 
 # Warm Cache
 \time -f 'Elapsed: %E' ./target/release/rs-1brc > /dev/null
-Elapsed: 0:01.22
+Elapsed: 0:01.70
 
 # Use Profiling Guided Optimization
 # i.e. run ./profile.sh first
 \time -f 'Elapsed: %E' ./target/x86_64-unknown-linux-gnu/release/rs-1brc > /dev/null
-Elapsed: 0:01.26
+Elapsed: 0:01.61
 ```

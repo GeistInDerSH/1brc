@@ -11,13 +11,14 @@ use std::sync::{Arc, Mutex};
 use std::thread::available_parallelism;
 use std::{env, io, slice, thread};
 
-const INPUT_FILE_NAME: &str = "measurements.txt";
+const INPUT_FILE_NAME: &str = "measurements3.txt";
 /// The size of the Mmap segment to read
 const SEGMENT_SIZE: usize = 1 << 21;
 /// 64-bit hash constant from FxHash
 const FX_HASH_CONST: usize = 0x517cc1b727220a95;
-/// There are up to 413 unique stations, so this is the closes power of 2
-const MAP_CAPACITY: usize = 512;
+/// There are 10 000 unique stations.
+/// Don't bother with the closest power of 2 (16 384), because we'd way over shoot
+const MAP_CAPACITY: usize = 10_000;
 /// Cover the size of the format string to allow for us to have an approximately
 /// correct write buffer size
 const ESTIMATED_PRINT_SIZE: usize = 20 // station name
