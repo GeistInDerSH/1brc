@@ -213,7 +213,7 @@ fn next_newline(memory: &[u8], prev: usize) -> usize {
     loop {
         // If we were to try and slice past the end, just return the end
         if prev + 8 >= memory.len() {
-            return memory.len();
+            return memory.len() - 1;
         }
 
         let slice: [u8; 8] = memory[prev..prev + 8].try_into().unwrap();
