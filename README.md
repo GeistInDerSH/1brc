@@ -19,12 +19,12 @@ Elapsed: 0:26.18
 
 # Warm Cache
 \time -f 'Elapsed: %E' ./target/release/rs-1brc > /dev/null
-Elapsed: 0:01.29
+Elapsed: 0:01.56
 
 # Use Profiling Guided Optimization
 # i.e. run ./profile.sh first
 \time -f 'Elapsed: %E' ./target/x86_64-unknown-linux-gnu/release/rs-1brc > /dev/null
-Elapsed: 0:01.30
+Elapsed: 0:01.68
 ```
 
 ### 10K Key Set
@@ -36,12 +36,12 @@ Elapsed: 0:22.65
 
 # Warm Cache
 \time -f 'Elapsed: %E' ./target/release/rs-1brc > /dev/null
-Elapsed: 0:01.70
+Elapsed: 0:02.22
 
 # Use Profiling Guided Optimization
 # i.e. run ./profile.sh first
 \time -f 'Elapsed: %E' ./target/x86_64-unknown-linux-gnu/release/rs-1brc > /dev/null
-Elapsed: 0:01.61
+Elapsed: 0:02.45
 ```
 
 ## Note

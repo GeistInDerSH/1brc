@@ -131,22 +131,19 @@ impl Drop for Mmap {
 // i64 is definitely overkill for the min and max, but i16/i32
 // doesn't seem to provide much of a benefit in terms of speed. Likely because the
 // CPU can load it all into memory anyway ¯\_(ツ)_/¯
-#[derive(Clone)]
-struct Data<'a> {
-    name: &'a [u8],
-    min: i64,
-    max: i64,
+struct Data {
+    min: i32,
+    max: i32,
     sum: i64,
     count: i64,
 }
 
-impl<'a> Data<'a> {
+impl Data {
     #[inline]
-    fn new(name: &'a [u8], val: i64) -> Self {
+    fn new(val: i64) -> Self {
         Data {
-            name,
-            min: val,
-            max: val,
+            min: val as i32,
+            max: val as i32,
             sum: val,
             count: 1,
         }
@@ -158,19 +155,19 @@ impl<'a> Data<'a> {
     }
 
     #[inline]
-    fn min(&self) -> f64 {
-        self.min as f64 / 10.0
+    fn min(&self) -> f32 {
+        self.min as f32 / 10.0
     }
 
     #[inline]
-    fn max(&self) -> f64 {
-        self.max as f64 / 10.0
+    fn max(&self) -> f32 {
+        self.max as f32 / 10.0
     }
 
     #[inline]
     fn add_value(&mut self, value: i64) {
-        self.max = self.max.max(value);
-        self.min = self.min.min(value);
+        self.max = self.max.max(value as i32);
+        self.min = self.min.min(value as i32);
         self.sum += value;
         self.count += 1;
     }
@@ -209,31 +206,29 @@ fn next_newline(memory: &[u8], prev: usize) -> usize {
     prev
 }
 
-// Copy of arthurlm's version
+// Copy of arthurlm's version, with some changes
 // https://github.com/arthurlm/one-brc-rs/blob/139807ce242fb33b33f07778f38a103e4057ed23/src/main.rs#L124
 #[inline]
-fn parse_line(line: &[u8]) -> (&[u8], i64) {
+fn parse_line(memory: &[u8], start: usize, end: usize) -> (&[u8], i64) {
     unsafe {
-        let len = line.len();
+        let float_digit = (*memory.get_unchecked(end - 1) & 0x0F) as i64;
+        let int_2 = (*memory.get_unchecked(end - 3) & 0x0F) as i64 * 10;
 
-        let float_digit = (*line.get_unchecked(len - 1) & 0x0F) as i64;
-        let int_2 = (*line.get_unchecked(len - 3) & 0x0F) as i64 * 10;
-
-        let (sep, is_neg, int_1) = match *line.get_unchecked(len - 4) {
-            b';' => (len - 4, false, 0),
-            b'-' => (len - 5, true, 0),
+        let (sep, is_neg, int_1) = match *memory.get_unchecked(end - 4) {
+            b';' => (end - 4, false, 0),
+            b'-' => (end - 5, true, 0),
             val => {
                 let int_1 = (val & 0x0F) as i64 * 100;
-                match *line.get_unchecked(len - 5) {
-                    b';' => (len - 5, false, int_1),
-                    _ => (len - 6, true, int_1),
+                match *memory.get_unchecked(end - 5) {
+                    b';' => (end - 5, false, int_1),
+                    _ => (end - 6, true, int_1),
                 }
             }
         };
 
         let tmp = int_1 + int_2 + float_digit;
         let temp = if is_neg { -tmp } else { tmp };
-        let station = line.get_unchecked(..sep);
+        let station = memory.get_unchecked(start..sep);
 
         (station, temp)
     }
@@ -243,7 +238,7 @@ fn worker<'a>(
     memory: &'a [u8],
     file_size: usize,
     seg: Arc<Mutex<usize>>,
-    entries: Arc<Mutex<FxHashMap<u64, Data<'a>>>>,
+    entries: Arc<Mutex<FxHashMap<&'a [u8], Data>>>,
 ) {
     let mut local_values = FxHashMap::with_capacity_and_hasher(MAP_CAPACITY, Default::default());
 
@@ -275,20 +270,12 @@ fn worker<'a>(
         // this segment
         while start < end {
             let newline = next_newline(memory, start);
-
-            let line = &memory[start..newline];
-            let (station, value) = parse_line(line);
-
-            let hash = {
-                let mut hasher = FxHasher::default();
-                hasher.write(&station);
-                hasher.finish()
-            };
+            let (station, value) = parse_line(memory, start, newline);
 
             local_values
-                .entry(hash)
-                .and_modify(|data: &mut Data<'a>| data.add_value(value))
-                .or_insert_with(|| Data::new(station, value));
+                .entry(station)
+                .and_modify(|data: &mut Data| data.add_value(value))
+                .or_insert(Data::new(value));
 
             start = newline + 1;
         }
@@ -356,17 +343,17 @@ fn main() -> io::Result<()> {
     }
 
     if let Ok(entry_list) = entries.lock() {
-        let mut records: Vec<_> = entry_list.values().collect();
-        records.sort_unstable_by_key(|d| d.name);
+        let mut records: Vec<_> = entry_list.iter().collect();
+        records.sort_unstable_by_key(|(name, _)| *name);
 
         let mut writer: Vec<u8> = Vec::with_capacity(MAP_CAPACITY * ESTIMATED_PRINT_SIZE);
         writer.push(b'{');
-        for (i, val) in records.into_iter().enumerate() {
+        for (i, (name, val)) in records.into_iter().enumerate() {
             if i > 0 {
                 writer.extend_from_slice(b", ");
             }
 
-            writer.extend_from_slice(val.name);
+            writer.extend_from_slice(name);
             writer.push(b'=');
 
             write!(
@@ -396,11 +383,11 @@ mod test {
     #[test]
     fn parse_line_test() {
         assert_eq!(
-            parse_line("phoenix;50.0".as_bytes()),
+            parse_line("phoenix;50.0\n".as_bytes(), 0, 12),
             ("phoenix".as_bytes(), 500)
         );
         assert_eq!(
-            parse_line("phoenix;-50.0".as_bytes()),
+            parse_line("phoenix;-50.0\n".as_bytes(), 0, 13),
             ("phoenix".as_bytes(), -500)
         );
     }
